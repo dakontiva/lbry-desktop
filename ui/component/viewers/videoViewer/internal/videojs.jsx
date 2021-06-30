@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import Button from 'component/button';
 import * as ICONS from 'constants/icons';
 import classnames from 'classnames';
-import videojs from 'video.js/dist/video.min.js';
+import videojs from 'video.js';
 // import 'video.js/dist/alt/video-js-cdn.min.css'; --> 'scss/third-party.scss'
 import eventTracking from 'videojs-event-tracking';
 import * as OVERLAY from './overlays';
@@ -12,6 +12,9 @@ import hlsQualitySelector from './plugins/videojs-hls-quality-selector/plugin';
 import recsys from './plugins/videojs-recsys/plugin';
 import qualityLevels from 'videojs-contrib-quality-levels';
 import isUserTyping from 'util/detect-typing';
+import 'videojs-contrib-ads';
+import 'videojs-ima';
+import aniview from './plugins/videojs-aniview/plugin';
 
 const isDev = process.env.NODE_ENV !== 'production';
 
@@ -127,6 +130,10 @@ if (!Object.keys(videojs.getPlugins()).includes('qualityLevels')) {
 if (!Object.keys(videojs.getPlugins()).includes('recsys')) {
   videojs.registerPlugin('recsys', recsys);
 }
+
+/*if (!Object.keys(videojs.getPlugins()).includes('ima')) {
+  videojs.registerPlugin('ima', ImaPlugin.init);
+}*/
 
 // ****************************************************************************
 // LbryVolumeBarClass
@@ -599,6 +606,14 @@ export default React.memo<Props>(function VideoJs(props: Props) {
         userId: userId,
       });
 
+      // player.aniview();
+
+      player.ima({
+        // id: 'ad_content_video',
+        vpaidMode: google.ima.ImaSdkSettings.VpaidMode.INSECURE,
+        adTagUrl: 'https://vast.aniview.com/api/adserver61/vast/?AV_PUBLISHERID=60afcbc58cfdb065440d2426&AV_CHANNELID=60b354389c7adb506d0bd9a4'
+      });
+
       // Update player source
       player.src({
         src: finalSource,
@@ -610,6 +625,20 @@ export default React.memo<Props>(function VideoJs(props: Props) {
         player.bigPlayButton.hide();
       }
     });
+  }, [source, reload]);
+
+  // Load IMA3 SDK
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = `https://imasdk.googleapis.com/js/sdkloader/ima3.js`;
+    script.async = true;
+    // $FlowFixMe
+    document.body.appendChild(script);
+
+    return () => {
+      // $FlowFixMe
+      document.body.removeChild(script);
+    };
   }, [source, reload]);
 
   return (
