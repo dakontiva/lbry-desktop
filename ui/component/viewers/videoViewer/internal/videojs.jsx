@@ -82,7 +82,7 @@ const VIDEO_JS_OPTIONS = {
   responsive: true,
   controls: true,
   html5: {
-    hls: {
+    vhs: {
       overrideNative: !videojs.browser.IS_ANY_SAFARI,
     },
   },
@@ -132,10 +132,6 @@ if (!Object.keys(videojs.getPlugins()).includes('qualityLevels')) {
 if (!Object.keys(videojs.getPlugins()).includes('recsys')) {
   videojs.registerPlugin('recsys', recsys);
 }
-
-/*if (!Object.keys(videojs.getPlugins()).includes('ima')) {
-  videojs.registerPlugin('ima', ImaPlugin.init);
-}*/
 
 // ****************************************************************************
 // LbryVolumeBarClass
@@ -481,9 +477,7 @@ export default React.memo<Props>(function VideoJs(props: Props) {
 
   // Create the video DOM element and wrapper
   function createVideoPlayerDOM(container) {
-    if (!container) {
-      return;
-    }
+    if (!container) return;
 
     // This seems like a poor way to generate the DOM for video.js
     const wrapper = document.createElement('div');
@@ -497,19 +491,54 @@ export default React.memo<Props>(function VideoJs(props: Props) {
     return el;
   }
 
+  function detectFileType() {
+    console.log(`Detecting file type via pre-fetch...`);
+    return new Promise(async (res, rej) => {
+      try {
+        const response = await fetch(source, { method: 'HEAD', cache: 'no-store' });
+
+        // Temp variables to hold results
+        let finalType = sourceType;
+        let finalSource = source;
+
+        // override type if we receive an .m3u8 (transcoded mp4)
+        // do we need to check if explicitly redirected
+        // or is checking extension only a safer method
+        if (response &&
+          response.redirected &&
+          response.url &&
+          response.url.endsWith('m3u8')) {
+          finalType = 'application/x-mpegURL';
+          finalSource = response.url;
+        }
+
+        console.log(`File type is: ${finalType}`);
+
+        // Modify video source in options
+        videoJsOptions.sources = [
+          {
+            src: finalSource,
+            type: finalType,
+          },
+        ];
+
+        return res(videoJsOptions);
+      } catch (error) {
+        console.error(`Failed to pre-fetch video!`);
+        return rej(error);
+      }
+    });
+  }
+
   // Initialize video.js
   function initializeVideoPlayer(el) {
-    if (!el) {
-      return;
-    }
+    if (!el) return;
 
     const vjs = videojs(el, videoJsOptions, () => {
       const player = playerRef.current;
 
       // this seems like a weird thing to have to check for here
-      if (!player) {
-        return;
-      }
+      if (!player) return;
 
       // Add various event listeners to player
       player.one('play', onInitialPlay);
@@ -530,71 +559,6 @@ export default React.memo<Props>(function VideoJs(props: Props) {
 
       // I think this is a callback function
       onPlayerReady(player);
-    });
-
-    // fixes #3498 (https://github.com/lbryio/lbry-desktop/issues/3498)
-    // summary: on firefox the focus would stick to the fullscreen button which caused buggy behavior with spacebar
-    vjs.on('fullscreenchange', () => document.activeElement && document.activeElement.blur());
-
-    return vjs;
-  }
-
-  // This lifecycle hook is only called once (on mount), or when `isAudio` changes.
-  useEffect(() => {
-    const vjsElement = createVideoPlayerDOM(containerRef.current);
-    const vjsPlayer = initializeVideoPlayer(vjsElement);
-
-    // Add reference to player to global scope
-    window.player = vjsPlayer;
-
-    // Set reference in component state
-    playerRef.current = vjsPlayer;
-
-    // Add event listener for keyboard shortcuts
-    window.addEventListener('keydown', handleKeyDown);
-
-    // Cleanup
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-
-      const player = playerRef.current;
-      if (player) {
-        window.player = undefined;
-        player.dispose();
-      }
-    };
-  }, [isAudio]);
-
-  // Update video player and reload when source URL changes
-  useEffect(() => {
-    // For some reason the video player is responsible for detecting content type this way
-    fetch(source, { method: 'HEAD', cache: 'no-store' }).then((response) => {
-      const player = playerRef.current;
-
-      if (!player) {
-        return;
-      }
-
-      let type = sourceType;
-      let finalSource = source;
-      // override type if we receive an .m3u8 (transcoded mp4)
-      if (response && response.redirected && response.url && response.url.endsWith('m3u8')) {
-        type = 'application/x-mpegURL';
-        finalSource = response.url;
-      }
-
-      // Update player poster
-      // note: the poster prop seems to return null usually.
-      if (poster) player.poster(poster);
-
-      // Update player source
-      player.src({
-        src: finalSource,
-        type: type,
-      });
-
-      // set playsinline for mobile
-      player.children_[0].setAttribute('playsinline', '');
 
       // Add quality selector to player
       player.hlsQualitySelector({
@@ -616,20 +580,90 @@ export default React.memo<Props>(function VideoJs(props: Props) {
         adTagUrl: macroUrl,
       });
 
-      // Update player source
-      player.src({
-        src: finalSource,
-        type: type,
+      // set playsinline for mobile
+      // TODO: make this better
+      player.children_[0].setAttribute('playsinline', '');
+    });
+
+    // fixes #3498 (https://github.com/lbryio/lbry-desktop/issues/3498)
+    // summary: on firefox the focus would stick to the fullscreen button which caused buggy behavior with spacebar
+    vjs.on('fullscreenchange', () => document.activeElement && document.activeElement.blur());
+
+    return vjs;
+  }
+
+  // This lifecycle hook is only called once (on mount), or when `isAudio` changes.
+  useEffect(() => {
+    const vjsElement = createVideoPlayerDOM(containerRef.current);
+
+    // Detect source file type via pre-fetch (async)
+    detectFileType()
+      .then(() => {
+        // Initialize Video.js
+        const vjsPlayer = initializeVideoPlayer(vjsElement);
+
+        // Add reference to player to global scope
+        window.player = vjsPlayer;
+
+        // Set reference in component state
+        playerRef.current = vjsPlayer;
+
+        // Add event listener for keyboard shortcuts
+        window.addEventListener('keydown', handleKeyDown);
       });
 
-      // PR #5570: Temp workaround to avoid double Play button until the next re-architecture.
-      if (!player.paused()) {
-        player.bigPlayButton.hide();
+    // Cleanup
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+
+      const player = playerRef.current;
+      if (player) {
+        window.player = undefined;
+        player.dispose();
       }
-    });
+    };
+  }, [isAudio]);
+
+  // Update video player and reload when source URL changes
+  useEffect(() => {
+    // For some reason the video player is responsible for detecting content type this way
+    fetch(source, { method: 'HEAD', cache: 'no-store' })
+      .then((response) => {
+
+        let finalType = sourceType;
+        let finalSource = source;
+
+        // override type if we receive an .m3u8 (transcoded mp4)
+        // do we need to check if explicitly redirected
+        // or is checking extension only a safer method
+        if (response &&
+          response.redirected &&
+          response.url &&
+          response.url.endsWith('m3u8')) {
+          finalType = 'application/x-mpegURL';
+          finalSource = response.url;
+        }
+
+        // Modify video source in options
+        videoJsOptions.sources = [
+          {
+            src: finalSource,
+            type: finalType,
+          },
+        ];
+
+        // Update player source
+        const player = playerRef.current;
+        if (!player) return;
+
+        // PR #5570: Temp workaround to avoid double Play button until the next re-architecture.
+        if (!player.paused()) {
+          player.bigPlayButton.hide();
+        }
+      });
   }, [source, reload]);
 
-  // Load IMA3 SDK
+  // Load IMA3 SDK for aniview
   useEffect(() => {
     const script = document.createElement('script');
     script.src = `https://imasdk.googleapis.com/js/sdkloader/ima3.js`;
